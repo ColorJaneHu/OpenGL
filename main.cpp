@@ -6,1160 +6,381 @@
 //
 // ============================================================
 //
-// FILE: assign3.cpp
-
-
-#include <stdlib.h>
-#include <stdio.h>
-#include <math.h>
-#include <GL/glew.h>
-#ifdef __APPLE__
-#include <GLUT/glut.h>
-#else
-#include <GL/glut.h>
-#endif
-#include "image_io.h"
-
-
-/////////////////////////////////////////////////////////////////////////////
-// CONSTANTS
-/////////////////////////////////////////////////////////////////////////////
-
-#define PI                  3.1415926535897932384626433832795
-
-#define SCENE_RADIUS        6.0     // Mainly for setting far clipping plane distance.
-
-// The room has a square floor, which is centered at the world-space origin.
-// The z-axis is pointing up.
-
-#define ROOM_WIDTH          6.0
-#define ROOM_HEIGHT         4.0
-
-// The reflective tabletop is a rectangle that is always parallel to the x-y plane.
-// The sides of the tabletop are always parallel to the x-axis or y-axis.
-
-#define TABLETOP_X1         -1.0
-#define TABLETOP_X2         1.0
-#define TABLETOP_Y1         -1.5
-#define TABLETOP_Y2         1.5
-#define TABLETOP_Z          1.2     // This is the z coordinate of the top-most face of the table.
-
-#define TABLE_THICKNESS     0.1
-
-// The followings are for navigation and setting the view of the (actual) eye.
-
-#define LOOKAT_X            0.0     // Look-at point x coordinate.
-#define LOOKAT_Y            0.0     // Look-at point y coordinate.
-#define LOOKAT_Z            1.0     // Look-at point z coordinate.
-
-#define EYE_INIT_DIST       5.0     // Initial distance of eye from look-at point.
-#define EYE_DIST_INCR       0.2     // Distance increment when changing eye's distance.
-#define EYE_MIN_DIST        0.1     // Min eye's distance from look-at point.
-
-#define EYE_MIN_LATITUDE    -88.0   // Min eye's latitude (in degrees) w.r.t. look-at point.
-#define EYE_MAX_LATITUDE    88.0    // Max eye's latitude (in degrees) w.r.t. look-at point.
-#define EYE_LATITUDE_INCR   2.0     // Degree increment when changing eye's latitude.
-#define EYE_LONGITUDE_INCR  2.0     // Degree increment when changing eye's longitude.
-
-
-// Light 0.
-const GLfloat light0Ambient[] = { 0.2, 0.2, 0.2, 1.0 };
-const GLfloat light0Diffuse[] = { 1.0, 1.0, 1.0, 1.0 };
-const GLfloat light0Specular[] = { 1.0, 1.0, 1.0, 1.0 };
-const GLfloat light0Position[] = { 10.0, -5.0, 8.0, 1.0 };
-
-// Light 1.
-const GLfloat light1Ambient[] = { 0.2, 0.2, 0.2, 1.0 };
-const GLfloat light1Diffuse[] = { 1.0, 1.0, 1.0, 1.0 };
-const GLfloat light1Specular[] = { 1.0, 1.0, 1.0, 1.0 };
-const GLfloat light1Position[] = { -2.0, 10.0, -2.0, 1.0 };
-
-
-// Texture image filenames.
-const char woodTexFile[] = "images/wood.jpg";
-const char ceilingTexFile[] = "images/ceiling.jpg";
-const char brickTexFile[] = "images/brick.jpg";
-const char checkerTexFile[] = "images/checker.png";
-const char spotsTexFile[] = "images/spots.png";
-const char cubeTexFile[] = "images/cube3.jpg";
+// FILE: Main.cpp
 
 
 
-/////////////////////////////////////////////////////////////////////////////
-// GLOBAL VARIABLES
-/////////////////////////////////////////////////////////////////////////////
+#include <cstdlib>
+#include <cstdio>
+#include <cmath>
+#include "Util.h"
+#include "Vector3d.h"
+#include "Color.h"
+#include "Image.h"
+#include "Ray.h"
+#include "Camera.h"
+#include "Material.h"
+#include "Light.h"
+#include "Surface.h"
+#include "Sphere.h"
+#include "Plane.h"
+#include "Triangle.h"
+#include "Scene.h"
+#include "Raytrace.h"
 
-// Window's size.
-int winWidth = 800;     // Window width in pixels.
-int winHeight = 600;    // Window height in pixels.
-
-
-// Define (actual) eye position.
-// Initial eye position is at [EYE_INIT_DIST, 0, 0] + [LOOKAT_X, LOOKAT_Y, LOOKAT_Z]
-// in the world space, looking at [LOOKAT_X, LOOKAT_Y, LOOKAT_Z].
-// The up-vector is always [0, 0, 1].
-
-double eyeLatitude = 0.0;
-double eyeLongitude = 0.0;
-double eyeDistance = EYE_INIT_DIST;
-
-// The actual eye position in world space.
-// This is computed from eyeLatitude, eyeLongitude, eyeDistance, and the look-at point.
-
-double eyePos[3];
-
-// Texture objects.
-GLuint reflectionTexObj;
-GLuint woodTexObj;
-GLuint ceilingTexObj;
-GLuint brickTexObj;
-GLuint checkerTexObj;
-GLuint spotsTexObj;
-GLuint cubeTexObj;
-
-// Others.
-bool drawAxes = true;           // Draw world coordinate frame axes iff true.
-bool drawWireframe = false;     // Draw polygons in wireframe if true, otherwise polygons are filled.
-bool hasTexture = true;         // Toggle texture mapping.
+using namespace std;
 
 
-// Forward function declarations.
-void DrawAxes( double length );
-void DrawRoom( void );
-void DrawTeapot( void );
-void DrawSphere( void );
-void DrawTable( void );
-void DrawCube( void );//
-void DrawTinyCube(void);/////
+// Constants for Scene 1.
+static const int imageWidth1 = 640;
+static const int imageHeight1 = 480;
+static const int reflectLevels1 = 2;  // 0 -- object does not reflect scene.
+static const int hasShadow1 = false;
+
+// Constants for Scene 2.
+static const int imageWidth2 = 640;
+static const int imageHeight2 = 480;
+static const int reflectLevels2 = 2;  // 0 -- object does not reflect scene.
+static const int hasShadow2 = true;
 
 
-/////////////////////////////////////////////////////////////////////////////
-// Render the scene from the imaginary viewpoint and capture the image as
-// a texture map.
-//
-// This texture map is then used to texture map the tabletop rectangle
-// to simulate the reflection of the scene from the tabletop.
-/////////////////////////////////////////////////////////////////////////////
 
-void MakeReflectionImage( void )
+
+///////////////////////////////////////////////////////////////////////////
+// Raytrace the whole image of the scene and write it to a file.
+///////////////////////////////////////////////////////////////////////////
+
+void RenderImage( const char *imageFilename, const Scene &scene, int reflectLevels, bool hasShadow )
 {
-    //********************************************************
-    //*********** TASK #1: WRITE YOUR CODE BELOW *************
-    //********************************************************
-    // This function does the followings:
-    // STEP 1: Clears the correct buffers.
-    // STEP 2: Sets up the correct view volume for the imaginary viewpoint.
-    // STEP 3: Sets up the imaginary viewpoint.
-    // STEP 4: Sets up the light source positions in the world space.
-    // STEP 5: Draws the scene (may not need to draw all objects).
-    // STEP 6: Read the correct color buffer into the correct texture object.
-    //********************************************************
+    int imgWidth = scene.camera.getImageWidth();
+    int imgHeight = scene.camera.getImageHeight();
     
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);//step1
+    Image image( imgWidth, imgHeight );	// To store the result of ray tracing.
     
-    glMatrixMode(GL_PROJECTION);
-    glLoadIdentity();
-    glFrustum(TABLETOP_Y1 - eyePos[1], TABLETOP_Y2-eyePos[1], TABLETOP_X1-eyePos[0], TABLETOP_X2-eyePos[0],
-              TABLETOP_Z - ( 2 * TABLETOP_Z - eyePos[2]), ROOM_HEIGHT - ( 2 * TABLETOP_Z - eyePos[2]) + TABLETOP_Z);//step2
+    double startTime = Util::GetCurrRealTime();
+    double startCPUTime = Util::GetCurrCPUTime();
     
-    glMatrixMode(GL_MODELVIEW);
-    glLoadIdentity();
-    gluLookAt(eyePos[0], eyePos[1], 2 * TABLETOP_Z - eyePos[2], eyePos[0], eyePos[1], eyePos[2], 1, 0, 0);//step3
+    // Generate image.
+    for ( int y = 0; y < imgHeight; y++ )
+    {
+        double pixelPosY = y + 0.5;
+        
+        for ( int x = 0; x < imgWidth; x++ )
+        {
+            double pixelPosX = x + 0.5;
+            Ray ray = scene.camera.getRay( pixelPosX, pixelPosY );
+            Color pixelColor = Raytrace::TraceRay( ray, scene, reflectLevels, hasShadow );
+            pixelColor.clamp();
+            image.setPixel( x, y, pixelColor );
+        }
+        // printf( "%d ", y );
+    }
     
+    double stopCPUTime = Util::GetCurrCPUTime();
+    double stopTime = Util::GetCurrRealTime();
+    printf( "CPU time taken = %.1f sec\n", stopTime - startTime );
+    printf( "Real time taken = %.1f sec\n", stopTime - startTime );
     
-    glLightfv( GL_LIGHT0, GL_POSITION, light0Position );
-    glLightfv( GL_LIGHT1, GL_POSITION, light1Position );//step4
-    
-    
-    DrawRoom();// step5
-    DrawTeapot();
-    DrawSphere();
-    DrawCube();//
-    DrawTinyCube();/////
-    
-    glReadBuffer(GL_BACK);//step6
-    glBindTexture(GL_TEXTURE_2D, reflectionTexObj);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
-                    GL_LINEAR_MIPMAP_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_GENERATE_MIPMAP, GL_TRUE);
-    glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 0, 0, winWidth, winHeight, 0);
+    // Write image to file.
+    image.writeToFile( imageFilename );
 }
 
 
 
 
-/////////////////////////////////////////////////////////////////////////////
-// The display callback function.
-/////////////////////////////////////////////////////////////////////////////
+// Forward declarations. These functions are defined later in the file.
 
-void MyDisplay( void )
+void DefineScene1( Scene &scene, int imageWidth, int imageHeight );
+void DefineScene2( Scene &scene, int imageWidth, int imageHeight );
+
+
+
+
+void WaitForEnterKeyBeforeExit( void )
 {
-    if ( hasTexture )
-        glEnable( GL_TEXTURE_2D );
-    else
-        glDisable( GL_TEXTURE_2D );
-    
-    // Compute world-space eye position from eyeLatitude, eyeLongitude, eyeDistance, and look-at point.
-    eyePos[2] = eyeDistance * sin( eyeLatitude * PI / 180.0 ) + LOOKAT_Z;
-    double xy = eyeDistance * cos( eyeLatitude * PI / 180.0 );
-    eyePos[0] = xy * cos( eyeLongitude * PI / 180.0 ) + LOOKAT_X;
-    eyePos[1] = xy * sin( eyeLongitude * PI / 180.0 ) + LOOKAT_Y;
-    
-    MakeReflectionImage();
-    
-    glClear( GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT );
-    
-    glMatrixMode( GL_PROJECTION );
-    glLoadIdentity();
-    gluPerspective( 45.0, (double)winWidth/winHeight, EYE_MIN_DIST, eyeDistance + SCENE_RADIUS );
-    
-    glMatrixMode( GL_MODELVIEW );
-    glLoadIdentity();
-    gluLookAt( eyePos[0], eyePos[1], eyePos[2], LOOKAT_X, LOOKAT_Y, LOOKAT_Z, 0.0, 0.0, 1.0 );
-    
-    // Set world-space positions of the two lights.
-    glLightfv( GL_LIGHT0, GL_POSITION, light0Position );
-    glLightfv( GL_LIGHT1, GL_POSITION, light1Position );
-    
-    // Draw axes.
-    if ( drawAxes ) DrawAxes( SCENE_RADIUS );
-    
-    // Draw scene.
-    DrawRoom();
-    DrawTeapot();
-    DrawSphere();
-    DrawTable();
-    DrawCube();////
-    DrawTinyCube();///////
-    
-    glutSwapBuffers();
+    fflush( stdin );
+    getchar();
 }
 
 
 
 
-/////////////////////////////////////////////////////////////////////////////
-// The keyboard callback function.
-/////////////////////////////////////////////////////////////////////////////
-
-void MyKeyboard( unsigned char key, int x, int y )
+int main()
 {
-    switch ( key )
-    {
-            // Quit program.
-        case 'q':
-        case 'Q':
-            exit(0);
-            break;
-            
-            // Toggle between wireframe and filled polygons.
-        case 'w':
-        case 'W':
-            drawWireframe = !drawWireframe;
-            if ( drawWireframe )
-                glPolygonMode( GL_FRONT_AND_BACK, GL_LINE );
-            else
-                glPolygonMode( GL_FRONT_AND_BACK, GL_FILL );
-            glutPostRedisplay();
-            break;
-            
-            // Toggle axes.
-        case 'x':
-        case 'X':
-            drawAxes = !drawAxes;
-            glutPostRedisplay();
-            break;
-            
-            // Toggle texture mapping.
-        case 't':
-        case 'T':
-            hasTexture = !hasTexture;
-            glutPostRedisplay();
-            break;
-            
-            // Reset to initial view.
-        case 'r':
-        case 'R':
-            eyeLatitude = 0.0;
-            eyeLongitude = 0.0;
-            eyeDistance = EYE_INIT_DIST;
-            glutPostRedisplay();
-            break;
-    }
-}
-
-
-
-
-/////////////////////////////////////////////////////////////////////////////
-// The special key callback function.
-/////////////////////////////////////////////////////////////////////////////
-
-void MySpecialKey( int key, int x, int y )
-{
-    int modi = glutGetModifiers();
+    atexit( WaitForEnterKeyBeforeExit );
     
-    switch ( key )
-    {
-        case GLUT_KEY_LEFT:
-            eyeLongitude -= EYE_LONGITUDE_INCR;
-            if ( eyeLongitude < -360.0 ) eyeLongitude += 360.0 ;
-            glutPostRedisplay();
-            break;
-            
-        case GLUT_KEY_RIGHT:
-            eyeLongitude += EYE_LONGITUDE_INCR;
-            if ( eyeLongitude > 360.0 ) eyeLongitude -= 360.0 ;
-            glutPostRedisplay();
-            break;
-            
-        case GLUT_KEY_UP:
-            if ( modi != GLUT_ACTIVE_SHIFT )
-            {
-                eyeLatitude += EYE_LATITUDE_INCR;
-                if ( eyeLatitude > EYE_MAX_LATITUDE ) eyeLatitude = EYE_MAX_LATITUDE;
-            }
-            else
-            {
-                eyeDistance -= EYE_DIST_INCR;
-                if ( eyeDistance < EYE_MIN_DIST ) eyeDistance = EYE_MIN_DIST;
-            }
-            glutPostRedisplay();
-            break;
-            
-        case GLUT_KEY_DOWN:
-            if ( modi != GLUT_ACTIVE_SHIFT )
-            {
-                eyeLatitude -= EYE_LATITUDE_INCR;
-                if ( eyeLatitude < EYE_MIN_LATITUDE ) eyeLatitude = EYE_MIN_LATITUDE;
-            }
-            else
-            {
-                eyeDistance += EYE_DIST_INCR;
-            }
-            glutPostRedisplay();
-            break;
-    }
-}
-
-
-
-
-/////////////////////////////////////////////////////////////////////////////
-// The reshape callback function.
-/////////////////////////////////////////////////////////////////////////////
-
-void MyReshape( int w, int h )
-{
-    winWidth = w;
-    winHeight = h;
-    glViewport( 0, 0, w, h );
-}
-
-
-
-
-/////////////////////////////////////////////////////////////////////////////
-// Initialize some OpenGL states.
-/////////////////////////////////////////////////////////////////////////////
-
-void GLInit( void )
-{
-    glClearColor( 0.0, 0.0, 0.0, 1.0 ); // Set black background color.
     
-    glShadeModel( GL_SMOOTH ); // Enable Gouraud shading.
-    glEnable( GL_DEPTH_TEST ); // Use depth-buffer for hidden surface removal.
-    glEnable( GL_CULL_FACE );  // Enable back-face culling.
     
-    glDisable( GL_DITHER );
-    glDisable( GL_BLEND );
+    // Define Scene 1.
     
-    // Set Light 0.
-    glLightfv( GL_LIGHT0, GL_AMBIENT, light0Ambient );
-    glLightfv( GL_LIGHT0, GL_DIFFUSE, light0Diffuse );
-    glLightfv( GL_LIGHT0, GL_SPECULAR, light0Specular );
-    glEnable( GL_LIGHT0 );
+    Scene scene1;
+    DefineScene1( scene1, imageWidth1, imageHeight1 );
     
-    // Set Light 1.
-    glLightfv( GL_LIGHT1, GL_AMBIENT, light1Ambient );
-    glLightfv( GL_LIGHT1, GL_DIFFUSE, light1Diffuse );
-    glLightfv( GL_LIGHT1, GL_SPECULAR, light1Specular );
-    glEnable( GL_LIGHT1 );
+    // Render Scene 1.
     
-    glEnable( GL_LIGHTING );
+    printf( "Render Scene 1...\n" );
+    RenderImage( "out1.png", scene1, reflectLevels1, hasShadow1 );
+    printf( "Image completed.\n" );
     
-    // Set some global light properties.
-    GLfloat globalAmbient[] = { 0.2, 0.2, 0.2, 1.0 };
-    glLightModelfv( GL_LIGHT_MODEL_AMBIENT, globalAmbient );
-    glLightModeli( GL_LIGHT_MODEL_LOCAL_VIEWER, GL_TRUE );
-    glLightModeli( GL_LIGHT_MODEL_TWO_SIDE, GL_TRUE );
-    glLightModeli( GL_LIGHT_MODEL_COLOR_CONTROL, GL_SEPARATE_SPECULAR_COLOR );
     
-    // Set initial material properties.
-    GLfloat initMaterialAmbient[] = { 1.0, 1.0, 1.0, 1.0 };
-    GLfloat initMaterialDiffuse[] = { 1.0, 1.0, 1.0, 1.0 };
-    GLfloat initMaterialSpecular[] = { 0.5, 0.5, 0.5, 1.0 };
-    GLfloat initMaterialShininess[] = { 16.0 };
-    GLfloat initMaterialEmission[] = { 0.0, 0.0, 0.0, 1.0 };
-    glMaterialfv( GL_FRONT_AND_BACK, GL_AMBIENT, initMaterialAmbient );
-    glMaterialfv( GL_FRONT_AND_BACK, GL_DIFFUSE, initMaterialDiffuse );
-    glMaterialfv( GL_FRONT_AND_BACK, GL_SPECULAR, initMaterialSpecular );
-    glMaterialfv( GL_FRONT_AND_BACK, GL_SHININESS, initMaterialShininess );
-    glMaterialfv( GL_FRONT_AND_BACK, GL_EMISSION, initMaterialEmission );
     
-    // Let OpenGL automatically renomarlize all normal vectors.
-    // This is important if objects are to be scaled.
-    glEnable( GL_NORMALIZE );
-}
-
-
-
-
-/////////////////////////////////////////////////////////////////////////////
-// Set up texture maps.
-/////////////////////////////////////////////////////////////////////////////
-
-void SetUpTextureMaps( void )
-{
-    unsigned char *imageData = NULL;
-    int imageWidth, imageHeight, numComponents;
+     // Define Scene 2.
+     
+     Scene scene2;
+     DefineScene2( scene2, imageWidth2, imageHeight2 );
+     
+     // Render Scene 2.
+     
+     printf( "Render Scene 2...\n" );
+     RenderImage( "out2.png", scene2, reflectLevels2, hasShadow2 );
+     printf( "Image completed.\n" );
     
-    glPixelStorei( GL_UNPACK_ALIGNMENT, 1 );
     
-    
-    // This texture object is for the wood texture map.
-    
-    glGenTextures( 1, &woodTexObj );
-    glBindTexture( GL_TEXTURE_2D, woodTexObj );
-    glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT );
-    glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT );
-    glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR );
-    glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR );
-    
-    if ( ReadImageFile( woodTexFile, &imageData,
-                       &imageWidth, &imageHeight, &numComponents ) == 0 ) exit( 1 );
-    if ( numComponents != 3 )
-    {
-        fprintf( stderr, "Error: Texture image is not in RGB format.\n" );
-        exit( 1 );
-    }
-    
-    gluBuild2DMipmaps( GL_TEXTURE_2D, GL_RGB, imageWidth, imageHeight,
-                      GL_RGB, GL_UNSIGNED_BYTE, imageData );
-    
-    DeallocateImageData( &imageData );
-    
-    
-    // This texture object is for the ceiling texture map.
-    
-    glGenTextures( 1, &ceilingTexObj );
-    glBindTexture( GL_TEXTURE_2D, ceilingTexObj );
-    glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT );
-    glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT );
-    glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR );
-    glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR );
-    
-    if ( ReadImageFile( ceilingTexFile, &imageData,
-                       &imageWidth, &imageHeight, &numComponents ) == 0 ) exit( 1 );
-    if ( numComponents != 3 )
-    {
-        fprintf( stderr, "Error: Texture image is not in RGB format.\n" );
-        exit( 1 );
-    }
-    
-    gluBuild2DMipmaps( GL_TEXTURE_2D, GL_RGB, imageWidth, imageHeight,
-                      GL_RGB, GL_UNSIGNED_BYTE, imageData );
-    
-    DeallocateImageData( &imageData );
-    
-    
-    // This texture object is for the brick texture map.
-    
-    glGenTextures( 1, &brickTexObj );
-    glBindTexture( GL_TEXTURE_2D, brickTexObj );
-    glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT );
-    glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT );
-    glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR );
-    glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR );
-    
-    if ( ReadImageFile( brickTexFile, &imageData,
-                       &imageWidth, &imageHeight, &numComponents ) == 0 ) exit( 1 );
-    if ( numComponents != 3 )
-    {
-        fprintf( stderr, "Error: Texture image is not in RGB format.\n" );
-        exit( 1 );
-    }
-    
-    gluBuild2DMipmaps( GL_TEXTURE_2D, GL_RGB, imageWidth, imageHeight,
-                      GL_RGB, GL_UNSIGNED_BYTE, imageData );
-    
-    DeallocateImageData( &imageData );
-    
-    
-    // This texture object is for the checkered texture map.
-    
-    glGenTextures( 1, &checkerTexObj );
-    glBindTexture( GL_TEXTURE_2D, checkerTexObj );
-    glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT );
-    glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT );
-    glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR );
-    glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR );
-    
-    if ( ReadImageFile( checkerTexFile, &imageData,
-                       &imageWidth, &imageHeight, &numComponents ) == 0 ) exit( 1 );
-    if ( numComponents != 3 )
-    {
-        fprintf( stderr, "Error: Texture image is not in RGB format.\n" );
-        exit( 1 );
-    }
-    
-    gluBuild2DMipmaps( GL_TEXTURE_2D, GL_RGB, imageWidth, imageHeight,
-                      GL_RGB, GL_UNSIGNED_BYTE, imageData );
-    
-    DeallocateImageData( &imageData );
-    
-    
-    // This texture object is for the spots texture map.
-    
-    glGenTextures( 1, &spotsTexObj );
-    glBindTexture( GL_TEXTURE_2D, spotsTexObj );
-    glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT );
-    glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT );
-    glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR );
-    glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR );
-    
-    if ( ReadImageFile( spotsTexFile, &imageData,
-                       &imageWidth, &imageHeight, &numComponents ) == 0 ) exit( 1 );
-    if ( numComponents != 3 )
-    {
-        fprintf( stderr, "Error: Texture image is not in RGB format.\n" );
-        exit( 1 );
-    }
-    
-    gluBuild2DMipmaps( GL_TEXTURE_2D, GL_RGB, imageWidth, imageHeight,
-                      GL_RGB, GL_UNSIGNED_BYTE, imageData );
-    
-    DeallocateImageData( &imageData );
-    
-    
-    // This texture object is for storing the reflection image read from the color buffer.
-    
-    //********************************************************
-    //*********** TASK #1: WRITE YOUR CODE BELOW *************
-    //********************************************************
-    // Sets up the texture object reflectionTexObj for storing the reflection
-    // texture map that is to be mapped to the tabletop.
-    // You must make sure that mipmapping is used.
-    // You must also make sure that whenever a new image is copied to the texture object,
-    // all other lower-resolution mipmap levels are automatically generated.
-    //********************************************************
-    glGenTextures(1, &reflectionTexObj);
-    glBindTexture(GL_TEXTURE_2D, reflectionTexObj);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
-                    GL_LINEAR_MIPMAP_LINEAR);
-    
-    
-    glGenTextures(1, &cubeTexObj);
-    glBindTexture( GL_TEXTURE_2D, cubeTexObj );
-    glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT );
-    glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT );
-    glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR );
-    glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR );
-    
-    if ( ReadImageFile( cubeTexFile, &imageData,
-                       &imageWidth, &imageHeight, &numComponents ) == 0 ) exit( 1 );
-    if ( numComponents != 3 )
-    {
-        fprintf( stderr, "Error: Texture image is not in RGB format.\n" );
-        exit( 1 );
-    }
-    
-    gluBuild2DMipmaps( GL_TEXTURE_2D, GL_RGB, imageWidth, imageHeight,
-                      GL_RGB, GL_UNSIGNED_BYTE, imageData );
-    
-    DeallocateImageData( &imageData );
-    
-}
-
-
-
-
-/////////////////////////////////////////////////////////////////////////////
-// The main function.
-/////////////////////////////////////////////////////////////////////////////
-
-int main( int argc, char** argv )
-{
-    // Initialize GLUT and create window.
-    
-    glutInit( &argc, argv );
-    glutInitDisplayMode ( GLUT_RGB | GLUT_DOUBLE | GLUT_DEPTH );
-    glutInitWindowSize( winWidth, winHeight );
-    glutCreateWindow( "assign3" );
-    
-    
-    // Register the callback functions.
-    
-    glutDisplayFunc( MyDisplay );
-    glutReshapeFunc( MyReshape );
-    glutKeyboardFunc( MyKeyboard );
-    glutSpecialFunc( MySpecialKey );
-    
-    
-    // Initialize GLEW.
-    // The followings make sure OpenGL 1.4 is supported and set up the extensions.
-    
-    GLenum err = glewInit();
-    if ( err != GLEW_OK )
-    {
-        fprintf( stderr, "Error: %s.\n", glewGetErrorString( err ) );
-        exit( 1 );
-    }
-    printf( "Status: Using GLEW %s.\n\n", glewGetString( GLEW_VERSION ) );
-    
-    if ( !GLEW_VERSION_1_4 )
-    {
-        fprintf( stderr, "Error: OpenGL 1.4 is not supported.\n" );
-        exit( 1 );
-    }
-    
-    
-    // Setup the initial render context.
-    
-    GLInit();
-    SetUpTextureMaps();
-    
-    
-    // Display user instructions in console window.
-    
-    printf( "Press LEFT to move eye left.\n" );
-    printf( "Press RIGHT to move eye right.\n" );
-    printf( "Press UP to move eye up.\n" );
-    printf( "Press DOWN to move eye down.\n" );
-    printf( "Press SHIFT+UP to move closer.\n" );
-    printf( "Press SHIFT+DOWN to move further.\n" );
-    printf( "Press 'W' to toggle wireframe.\n" );
-    printf( "Press 'T' to toggle texture mapping.\n" );
-    printf( "Press 'X' to toggle axes.\n" );
-    printf( "Press 'R' to reset to initial view.\n" );
-    printf( "Press 'Q' to quit.\n\n" );
-    
-    
-    // Enter GLUT event loop.
-    
-    glutMainLoop();
+    printf( "All done.\n" );
     return 0;
 }
 
 
 
 
-//============================================================================
-//============================================================================
-// Functions below are for modeling the 3D objects.
-//============================================================================
-//============================================================================
 
+///////////////////////////////////////////////////////////////////////////
+// Modeling of Scene 1.
+///////////////////////////////////////////////////////////////////////////
 
-/////////////////////////////////////////////////////////////////////////////
-// Draw the x, y, z axes. Each is drawn with the input length.
-// The x-axis is red, y-axis green, and z-axis blue.
-/////////////////////////////////////////////////////////////////////////////
-
-void DrawAxes( double length )
+void DefineScene1( Scene &scene, int imageWidth, int imageHeight )
 {
-    glPushAttrib( GL_ALL_ATTRIB_BITS );
-    glDisable( GL_LIGHTING );
-    glDisable( GL_TEXTURE_2D );
-    glLineWidth( 3.0 );
-    glBegin( GL_LINES );
-    // x-axis.
-    glColor3f( 1.0, 0.0, 0.0 );
-    glVertex3d( 0.0, 0.0, 0.0 );
-    glVertex3d( length, 0.0, 0.0 );
-    // y-axis.
-    glColor3f( 0.0, 1.0, 0.0 );
-    glVertex3d( 0.0, 0.0, 0.0 );
-    glVertex3d( 0.0, length, 0.0 );
-    // z-axis.
-    glColor3f( 0.0, 0.0, 1.0 );
-    glVertex3d( 0.0, 0.0, 0.0 );
-    glVertex3d( 0.0, 0.0, length );
-    glEnd();
-    glPopAttrib();
+    scene.backgroundColor = Color( 0.2f, 0.3f, 0.5f );
+    
+    scene.amLight.I_a = Color( 1.0f, 1.0f, 1.0f ) * 0.25f;
+    
+    // Define materials.
+    
+    scene.numMaterials = 5;
+    scene.material = new Material[ scene.numMaterials ];
+    
+    // Light red.
+    scene.material[0].k_d = Color( 0.8f, 0.4f, 0.4f );
+    scene.material[0].k_a = scene.material[0].k_d;
+    scene.material[0].k_r = Color( 0.8f, 0.8f, 0.8f ) / 1.5f;
+    scene.material[0].k_rg = Color( 0.8f, 0.8f, 0.8f ) / 3.0f;
+    scene.material[0].n = 64.0f;
+    
+    // Light green.
+    scene.material[1].k_d = Color( 0.4f, 0.8f, 0.4f );
+    scene.material[1].k_a = scene.material[0].k_d;
+    scene.material[1].k_r = Color( 0.8f, 0.8f, 0.8f ) / 1.5f;
+    scene.material[1].k_rg = Color( 0.8f, 0.8f, 0.8f ) / 3.0f;
+    scene.material[1].n = 64.0f;
+    
+    // Light blue.
+    scene.material[2].k_d = Color( 0.4f, 0.4f, 0.8f ) * 0.9f;
+    scene.material[2].k_a = scene.material[0].k_d;
+    scene.material[2].k_r = Color( 0.8f, 0.8f, 0.8f ) / 1.5f;
+    scene.material[2].k_rg = Color( 0.8f, 0.8f, 0.8f ) / 2.5f;
+    scene.material[2].n = 64.0f;
+    
+    // Yellow.
+    scene.material[3].k_d = Color( 0.6f, 0.6f, 0.2f );
+    scene.material[3].k_a = scene.material[0].k_d;
+    scene.material[3].k_r = Color( 0.8f, 0.8f, 0.8f ) / 1.5f;
+    scene.material[3].k_rg = Color( 0.8f, 0.8f, 0.8f ) / 3.0f;
+    scene.material[3].n = 64.0f;
+    
+    // Gray.
+    scene.material[4].k_d = Color( 0.6f, 0.6f, 0.6f );
+    scene.material[4].k_a = scene.material[0].k_d;
+    scene.material[4].k_r = Color( 0.6f, 0.6f, 0.6f );
+    scene.material[4].k_rg = Color( 0.8f, 0.8f, 0.8f ) / 3.0f;
+    scene.material[4].n = 128.0f;
+    
+    
+    // Define point light sources.
+    
+    scene.numPtLights = 2;
+    scene.ptLight = new PointLightSource[ scene.numPtLights ];
+    
+    scene.ptLight[0].I_source = Color( 1.0f, 1.0f, 1.0f ) * 0.6f;
+    scene.ptLight[0].position = Vector3d( 100.0, 120.0, 10.0 );
+    
+    scene.ptLight[1].I_source = Color( 1.0f, 1.0f, 1.0f ) * 0.6f;
+    scene.ptLight[1].position = Vector3d( 5.0, 80.0, 60.0 );
+    
+    
+    // Define surface primitives.
+    
+    scene.numSurfaces = 15;
+    scene.surfacep = new SurfacePtr[ scene.numSurfaces ];
+    
+    scene.surfacep[0] = new Plane( 0.0, 1.0, 0.0, 0.0, &(scene.material[2]) ); // Horizontal plane.
+    scene.surfacep[1] = new Plane( 1.0, 0.0, 0.0, 0.0, &(scene.material[4]) ); // Left vertical plane.
+    scene.surfacep[2] = new Plane( 0.0, 0.0, 1.0, 0.0, &(scene.material[4]) ); // Right vertical plane.
+    scene.surfacep[3] = new Sphere( Vector3d( 40.0, 20.0, 42.0 ), 22.0, &(scene.material[0]) ); // Big sphere.
+    scene.surfacep[4] = new Sphere( Vector3d( 75.0, 10.0, 40.0 ), 12.0, &(scene.material[1]) ); // Small sphere.
+    
+    // Cube +y face.
+    scene.surfacep[5] = new Triangle( Vector3d( 50.0, 20.0, 90.0 ), Vector3d( 50.0, 20.0, 70.0 ),
+                                     Vector3d( 30.0, 20.0, 70.0 ), &(scene.material[3]) );
+    scene.surfacep[6] = new Triangle( Vector3d( 50.0, 20.0, 90.0 ), Vector3d( 30.0, 20.0, 70.0 ),
+                                     Vector3d( 30.0, 20.0, 90.0 ), &(scene.material[3]) );
+    
+    // Cube +x face.
+    scene.surfacep[7] = new Triangle( Vector3d( 50.0, 0.0, 70.0 ), Vector3d( 50.0, 20.0, 70.0 ),
+                                     Vector3d( 50.0, 20.0, 90.0 ), &(scene.material[3]) );
+    scene.surfacep[8] = new Triangle( Vector3d( 50.0, 0.0, 70.0 ), Vector3d( 50.0, 20.0, 90.0 ),
+                                     Vector3d( 50.0, 0.0, 90.0 ), &(scene.material[3]) );
+    
+    // Cube -x face.
+    scene.surfacep[9] = new Triangle( Vector3d( 30.0, 0.0, 90.0 ), Vector3d( 30.0, 20.0, 90.0 ),
+                                     Vector3d( 30.0, 20.0, 70.0 ), &(scene.material[3]) );
+    scene.surfacep[10] = new Triangle( Vector3d( 30.0, 0.0, 90.0 ), Vector3d( 30.0, 20.0, 70.0 ),
+                                      Vector3d( 30.0, 0.0, 70.0 ), &(scene.material[3]) );
+    
+    // Cube +z face.
+    scene.surfacep[11] = new Triangle( Vector3d( 50.0, 0.0, 90.0 ), Vector3d( 50.0, 20.0, 90.0 ),
+                                      Vector3d( 30.0, 20.0, 90.0 ), &(scene.material[3]) );
+    scene.surfacep[12] = new Triangle( Vector3d( 50.0, 0.0, 90.0 ), Vector3d( 30.0, 20.0, 90.0 ),
+                                      Vector3d( 30.0, 0.0, 90.0 ), &(scene.material[3]) );
+    
+    // Cube -z face.
+    scene.surfacep[13] = new Triangle( Vector3d( 30.0, 0.0, 70.0 ), Vector3d( 30.0, 20.0, 70.0 ),
+                                      Vector3d( 50.0, 20.0, 70.0 ), &(scene.material[3]) );
+    scene.surfacep[14] = new Triangle( Vector3d( 30.0, 0.0, 70.0 ), Vector3d( 50.0, 20.0, 70.0 ),
+                                      Vector3d( 50.0, 0.0, 70.0 ), &(scene.material[3]) );
+    
+    
+    // Define camera.
+    
+    scene.camera = Camera( Vector3d( 150.0, 120.0, 150.0 ), Vector3d( 45.0, 22.0, 55.0 ), Vector3d( 0.0, 1.0, 0.0 ),
+                          (-1.0 * imageWidth) / imageHeight, (1.0 * imageWidth) / imageHeight, -1.0, 1.0, 3.0, 
+                          imageWidth, imageHeight );
 }
 
 
 
 
-/////////////////////////////////////////////////////////////////////////////
-// Subdivide input quad into uSteps x vSteps smaller quads, and draw them.
-// The first vertex of the input quad has texture coordinates (s0, t0) and
-// vertex position (x0, y0, z0), and so on.
-//
-// The vertices of the input quad should be given in anti-clockwise order.
-//
-// The texture coordinates at the input vertices are bilinearly
-// interpolated to the newly created vertices.
-/////////////////////////////////////////////////////////////////////////////
 
-void SubdivideAndDrawQuad( int uSteps, int vSteps,
-                          float s0, float t0, float x0, float y0, float z0,
-                          float s1, float t1, float x1, float y1, float z1,
-                          float s2, float t2, float x2, float y2, float z2,
-                          float s3, float t3, float x3, float y3, float z3 )
+///////////////////////////////////////////////////////////////////////////
+// Modeling of Scene 2.
+///////////////////////////////////////////////////////////////////////////
+
+void DefineScene2( Scene &scene, int imageWidth, int imageHeight )
 {
-    float tc0[3] = { s0, t0, 0.0 };  float v0[3] = { x0, y0, z0 };
-    float tc1[3] = { s1, t1, 0.0 };  float v1[3] = { x1, y1, z1 };
-    float tc2[3] = { s2, t2, 0.0 };  float v2[3] = { x2, y2, z2 };
-    float tc3[3] = { s3, t3, 0.0 };  float v3[3] = { x3, y3, z3 };
+    //***********************************************
+    //*********** WRITE YOUR CODE HERE **************
+    //***********************************************
+    scene.backgroundColor = Color( 0.2f, 0.3f, 0.5f );
     
-    glBegin( GL_QUADS );
+    scene.amLight.I_a = Color( 1.0f, 1.0f, 1.0f ) * 0.25f;
     
-    for ( int u = 0; u < uSteps; u++ )
-    {
-        float uu = (float) u / uSteps;
-        float uu1 = (float) (u + 1) / uSteps;
-        float Atc[3], Btc[3], Ctc[3], Dtc[3];
-        float Av[3], Bv[3], Cv[3], Dv[3];
-        
-        for ( int i = 0; i < 3; i++ )
-        {
-            Atc[i] = tc0[i] + uu  * ( tc1[i] - tc0[i] );
-            Btc[i] = tc3[i] + uu  * ( tc2[i] - tc3[i] );
-            Ctc[i] = tc0[i] + uu1 * ( tc1[i] - tc0[i] );
-            Dtc[i] = tc3[i] + uu1 * ( tc2[i] - tc3[i] );
-            Av[i] = v0[i] + uu  * ( v1[i] - v0[i] );
-            Bv[i] = v3[i] + uu  * ( v2[i] - v3[i] );
-            Cv[i] = v0[i] + uu1 * ( v1[i] - v0[i] );
-            Dv[i] = v3[i] + uu1 * ( v2[i] - v3[i] );
-        }
-        
-        for ( int v = 0; v < vSteps; v++ )
-        {
-            float vv = (float) v / vSteps;
-            float vv1 = (float) (v + 1) / vSteps;
-            float Etc[3], Ftc[3], Gtc[3], Htc[3];
-            float Ev[3], Fv[3], Gv[3], Hv[3];
-            
-            for ( int i = 0; i < 3; i++ )
-            {
-                Etc[i] = Atc[i] + vv  * ( Btc[i] - Atc[i] );
-                Ftc[i] = Ctc[i] + vv  * ( Dtc[i] - Ctc[i] );
-                Gtc[i] = Atc[i] + vv1 * ( Btc[i] - Atc[i] );
-                Htc[i] = Ctc[i] + vv1 * ( Dtc[i] - Ctc[i] );
-                Ev[i] = Av[i] + vv  * ( Bv[i] - Av[i] );
-                Fv[i] = Cv[i] + vv  * ( Dv[i] - Cv[i] );
-                Gv[i] = Av[i] + vv1 * ( Bv[i] - Av[i] );
-                Hv[i] = Cv[i] + vv1 * ( Dv[i] - Cv[i] );
-            }
-            
-            glTexCoord2fv( Etc );  glVertex3fv( Ev );
-            glTexCoord2fv( Ftc );  glVertex3fv( Fv );
-            glTexCoord2fv( Htc );  glVertex3fv( Hv );
-            glTexCoord2fv( Gtc );  glVertex3fv( Gv );
-        }
-    }
+    // Define materials.
     
-    glEnd();
-}
+    scene.numMaterials = 5;
+    scene.material = new Material[ scene.numMaterials ];
+    
+    // Light red.
+    scene.material[0].k_d = Color( 0.8f, 0.4f, 0.4f );
+    scene.material[0].k_a = scene.material[0].k_d;
+    scene.material[0].k_r = Color( 0.8f, 0.8f, 0.8f ) / 1.5f;
+    scene.material[0].k_rg = Color( 0.8f, 0.8f, 0.8f ) / 3.0f;
+    scene.material[0].n = 64.0f;
+    
+    // Light green.
+    scene.material[1].k_d = Color( 0.4f, 0.8f, 0.4f );
+    scene.material[1].k_a = scene.material[0].k_d;
+    scene.material[1].k_r = Color( 0.8f, 0.8f, 0.8f ) / 1.5f;
+    scene.material[1].k_rg = Color( 0.8f, 0.8f, 0.8f ) / 3.0f;
+    scene.material[1].n = 64.0f;
+    
+    // Light blue.
+    scene.material[2].k_d = Color( 0.4f, 0.4f, 0.8f ) * 0.9f;
+    scene.material[2].k_a = scene.material[0].k_d;
+    scene.material[2].k_r = Color( 0.8f, 0.8f, 0.8f ) / 1.5f;
+    scene.material[2].k_rg = Color( 0.8f, 0.8f, 0.8f ) / 2.5f;
+    scene.material[2].n = 64.0f;
+    
+    // Yellow.
+    scene.material[3].k_d = Color( 0.6f, 0.6f, 0.2f );
+    scene.material[3].k_a = scene.material[0].k_d;
+    scene.material[3].k_r = Color( 0.8f, 0.8f, 0.8f ) / 1.5f;
+    scene.material[3].k_rg = Color( 0.8f, 0.8f, 0.8f ) / 3.0f;
+    scene.material[3].n = 64.0f;
+    
+    // Gray.
+    scene.material[4].k_d = Color( 0.6f, 0.6f, 0.6f );
+    scene.material[4].k_a = scene.material[0].k_d;
+    scene.material[4].k_r = Color( 0.6f, 0.6f, 0.6f );
+    scene.material[4].k_rg = Color( 0.8f, 0.8f, 0.8f ) / 3.0f;
+    scene.material[4].n = 128.0f;
+    
+    
+    // Define point light sources.
+    
+    scene.numPtLights = 2;
+    scene.ptLight = new PointLightSource[ scene.numPtLights ];
+    
+    scene.ptLight[0].I_source = Color( 1.0f, 1.0f, 1.0f ) * 0.6f;
+    scene.ptLight[0].position = Vector3d( 100.0, 120.0, 10.0 );
+    
+    scene.ptLight[1].I_source = Color( 1.0f, 1.0f, 1.0f ) * 0.6f;
+    scene.ptLight[1].position = Vector3d( 5.0, 80.0, 60.0 );
+    
+    
+    // Define surface primitives.
+    
+    scene.numSurfaces = 21;
+    scene.surfacep = new SurfacePtr[ scene.numSurfaces ];
+    
+    scene.surfacep[0] = new Plane( 0.0, 1.0, 0.0, 0.0, &(scene.material[2]) ); // Horizontal plane.
+    scene.surfacep[1] = new Plane( 1.0, 0.0, 0.0, 0.0, &(scene.material[4]) ); // Left vertical plane.
+    scene.surfacep[2] = new Plane( 0.0, 0.0, 1.0, 0.0, &(scene.material[4]) ); // Right vertical plane.
+    scene.surfacep[3] = new Sphere( Vector3d( 40.0, 20.0, 42.0 ), 18.0, &(scene.material[2]) ); // Big sphere.
+//    scene.surfacep[4] = new Sphere( Vector3d( 75.0, 10.0, 40.0 ), 12.0, &(scene.material[1]) ); // Small sphere.
+    
+    
+    // Cube +y face.
+    scene.surfacep[4] = new Triangle( Vector3d( 50.0, 20.0, 90.0 ), Vector3d( 50.0, 20.0, 70.0 ),
+                                     Vector3d( 30.0, 20.0, 70.0 ), &(scene.material[3]) );
+    scene.surfacep[5] = new Triangle( Vector3d( 50.0, 20.0, 90.0 ), Vector3d( 30.0, 20.0, 70.0 ),
+                                     Vector3d( 30.0, 20.0, 90.0 ), &(scene.material[3]) );
+    
+    // Cube +x face.
+    scene.surfacep[6] = new Triangle( Vector3d( 50.0, 0.0, 70.0 ), Vector3d( 50.0, 20.0, 70.0 ),
+                                     Vector3d( 50.0, 20.0, 90.0 ), &(scene.material[3]) );
+    scene.surfacep[7] = new Triangle( Vector3d( 50.0, 0.0, 70.0 ), Vector3d( 50.0, 20.0, 90.0 ),
+                                     Vector3d( 50.0, 0.0, 90.0 ), &(scene.material[3]) );
+    
+    // Cube -x face.
+    scene.surfacep[8] = new Triangle( Vector3d( 30.0, 0.0, 90.0 ), Vector3d( 30.0, 20.0, 90.0 ),
+                                     Vector3d( 30.0, 20.0, 70.0 ), &(scene.material[3]) );
+    scene.surfacep[9] = new Triangle( Vector3d( 30.0, 0.0, 90.0 ), Vector3d( 30.0, 20.0, 70.0 ),
+                                      Vector3d( 30.0, 0.0, 70.0 ), &(scene.material[3]) );
+    
+    // Cube +z face.
+    scene.surfacep[10] = new Triangle( Vector3d( 50.0, 0.0, 90.0 ), Vector3d( 50.0, 20.0, 90.0 ),
+                                      Vector3d( 30.0, 20.0, 90.0 ), &(scene.material[3]) );
+    scene.surfacep[11] = new Triangle( Vector3d( 50.0, 0.0, 90.0 ), Vector3d( 30.0, 20.0, 90.0 ),
+                                      Vector3d( 30.0, 0.0, 90.0 ), &(scene.material[3]) );
+    
+    // Cube -z face.
+    scene.surfacep[12] = new Triangle( Vector3d( 30.0, 0.0, 70.0 ), Vector3d( 30.0, 20.0, 70.0 ),
+                                      Vector3d( 50.0, 20.0, 70.0 ), &(scene.material[3]) );
+    scene.surfacep[13] = new Triangle( Vector3d( 30.0, 0.0, 70.0 ), Vector3d( 50.0, 20.0, 70.0 ),
+                                      Vector3d( 50.0, 0.0, 70.0 ), &(scene.material[3]) );
+    
+    scene.surfacep[14] = new Sphere( Vector3d( 40.0, 47.0, 42.0 ), 9.0, &(scene.material[2]) ); // Small sphere.
+    scene.surfacep[15] = new Sphere( Vector3d( 80.0, 20.0, 42.0 ), 18.0, &(scene.material[0]) ); // Small sphere.
+    scene.surfacep[16] = new Sphere( Vector3d( 80.0, 47.0, 42.0 ), 9.0, &(scene.material[0]) );
+    scene.surfacep[17] = new Sphere( Vector3d( 40.0, 30.0, 81.0 ), 9.0, &(scene.material[1]) );
+    scene.surfacep[18] = new Sphere( Vector3d( 40.0, 43.0, 81.0 ), 4.0, &(scene.material[1]) );
+    scene.surfacep[19] = new Sphere( Vector3d( 70.0, 10.0, 73.0 ), 10.0, &(scene.material[4]) );
+    
+    scene.surfacep[20] = new Sphere( Vector3d( 70.0, 25.0, 73.0 ), 5.0, &(scene.material[4]) );
 
-
-
-
-/////////////////////////////////////////////////////////////////////////////
-// Draw the room.
-// The walls, ceiling and floor are all texture-mapped.
-/////////////////////////////////////////////////////////////////////////////
-
-void DrawRoom( void )
-{
-    const float ROOM_HALF_WIDTH = ROOM_WIDTH / 2.0f;
+    // Define camera.
     
-    glTexEnvf( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE );
-    
-    // Ceiling.
-    
-    GLfloat matAmbient1[] = { 0.7, 0.7, 0.7, 1.0 };
-    GLfloat matDiffuse1[] = { 0.7, 0.7, 0.7, 1.0 };
-    GLfloat matSpecular1[] = { 0.3, 0.3, 0.3, 1.0 };
-    GLfloat matShininess1[] = { 32.0 };
-    glMaterialfv( GL_FRONT_AND_BACK, GL_AMBIENT, matAmbient1 );
-    glMaterialfv( GL_FRONT_AND_BACK, GL_DIFFUSE, matDiffuse1 );
-    glMaterialfv( GL_FRONT_AND_BACK, GL_SPECULAR, matSpecular1 );
-    glMaterialfv( GL_FRONT_AND_BACK, GL_SHININESS, matShininess1 );
-    
-    glBindTexture( GL_TEXTURE_2D, ceilingTexObj );
-    glNormal3f( 0.0, 0.0, -1.0 ); // Normal vector.
-    SubdivideAndDrawQuad( 24, 24, 0.0, 0.0, ROOM_HALF_WIDTH, ROOM_HALF_WIDTH, ROOM_HEIGHT,
-                         ROOM_WIDTH, 0.0, ROOM_HALF_WIDTH, -ROOM_HALF_WIDTH, ROOM_HEIGHT,
-                         ROOM_WIDTH, ROOM_WIDTH, -ROOM_HALF_WIDTH, -ROOM_HALF_WIDTH, ROOM_HEIGHT,
-                         0.0, ROOM_WIDTH, -ROOM_HALF_WIDTH, ROOM_HALF_WIDTH, ROOM_HEIGHT );
-    
-    // Walls.
-    
-    glBindTexture( GL_TEXTURE_2D, brickTexObj );
-    
-    // In +y direction.
-    glNormal3f( 0.0, -1.0, 0.0 ); // Normal vector.
-    SubdivideAndDrawQuad( 24, 16, 0.0, 0.0, -ROOM_HALF_WIDTH, ROOM_HALF_WIDTH, 0.0,
-                         ROOM_WIDTH/2, 0.0, ROOM_HALF_WIDTH, ROOM_HALF_WIDTH, 0.0,
-                         ROOM_WIDTH/2, ROOM_HEIGHT/2, ROOM_HALF_WIDTH, ROOM_HALF_WIDTH, ROOM_HEIGHT,
-                         0.0, ROOM_HEIGHT/2, -ROOM_HALF_WIDTH, ROOM_HALF_WIDTH, ROOM_HEIGHT );
-    // In -y direction.
-    glNormal3f( 0.0, 1.0, 0.0 ); // Normal vector.
-    SubdivideAndDrawQuad( 24, 16, 0.0, 0.0, ROOM_HALF_WIDTH, -ROOM_HALF_WIDTH, 0.0,
-                         ROOM_WIDTH/2, 0.0, -ROOM_HALF_WIDTH, -ROOM_HALF_WIDTH, 0.0,
-                         ROOM_WIDTH/2, ROOM_HEIGHT/2, -ROOM_HALF_WIDTH, -ROOM_HALF_WIDTH, ROOM_HEIGHT,
-                         0.0, ROOM_HEIGHT/2, ROOM_HALF_WIDTH, -ROOM_HALF_WIDTH, ROOM_HEIGHT );
-    // In +x direction.
-    glNormal3f( -1.0, 0.0, 0.0 ); // Normal vector.
-    SubdivideAndDrawQuad( 24, 16, 0.0, 0.0, ROOM_HALF_WIDTH, ROOM_HALF_WIDTH, 0.0,
-                         ROOM_WIDTH/2, 0.0, ROOM_HALF_WIDTH, -ROOM_HALF_WIDTH, 0.0,
-                         ROOM_WIDTH/2, ROOM_HEIGHT/2, ROOM_HALF_WIDTH, -ROOM_HALF_WIDTH, ROOM_HEIGHT,
-                         0.0, ROOM_HEIGHT/2, ROOM_HALF_WIDTH, ROOM_HALF_WIDTH, ROOM_HEIGHT );
-    // In -x direction.
-    glNormal3f( 1.0, 0.0, 0.0 ); // Normal vector.
-    SubdivideAndDrawQuad( 24, 16, 0.0, 0.0, -ROOM_HALF_WIDTH, -ROOM_HALF_WIDTH, 0.0,
-                         ROOM_WIDTH/2, 0.0, -ROOM_HALF_WIDTH, ROOM_HALF_WIDTH, 0.0,
-                         ROOM_WIDTH/2, ROOM_HEIGHT/2, -ROOM_HALF_WIDTH, ROOM_HALF_WIDTH, ROOM_HEIGHT,
-                         0.0, ROOM_HEIGHT/2, -ROOM_HALF_WIDTH, -ROOM_HALF_WIDTH, ROOM_HEIGHT );
-    
-    // Floor.
-    
-    GLfloat matAmbient2[] = { 0.6, 0.6, 0.6, 1.0 };
-    GLfloat matDiffuse2[] = { 0.6, 0.6, 0.6, 1.0 };
-    GLfloat matSpecular2[] = { 1.0, 1.0, 1.0, 1.0 };
-    GLfloat matShininess2[] = { 128.0 };
-    glMaterialfv( GL_FRONT_AND_BACK, GL_AMBIENT, matAmbient2 );
-    glMaterialfv( GL_FRONT_AND_BACK, GL_DIFFUSE, matDiffuse2 );
-    glMaterialfv( GL_FRONT_AND_BACK, GL_SPECULAR, matSpecular2 );
-    glMaterialfv( GL_FRONT_AND_BACK, GL_SHININESS, matShininess2 );
-    
-    glBindTexture( GL_TEXTURE_2D, checkerTexObj );
-    glNormal3f( 0.0, 0.0, 1.0 ); // Normal vector.
-    SubdivideAndDrawQuad( 24, 24, 0.0, 0.0, ROOM_HALF_WIDTH, -ROOM_HALF_WIDTH, 0.0,
-                         ROOM_WIDTH, 0.0, ROOM_HALF_WIDTH, ROOM_HALF_WIDTH, 0.0,
-                         ROOM_WIDTH, ROOM_WIDTH, -ROOM_HALF_WIDTH, ROOM_HALF_WIDTH, 0.0,
-                         0.0, ROOM_WIDTH, -ROOM_HALF_WIDTH, -ROOM_HALF_WIDTH, 0.0 );
-}
-
-
-
-
-/////////////////////////////////////////////////////////////////////////////
-// Draw a texture-mapped teapot.
-/////////////////////////////////////////////////////////////////////////////
-
-void DrawTeapot( void )
-{
-    double size = 0.45;
-    
-    GLfloat matAmbient[] = { 0.8, 0.8, 0.8, 1.0 };
-    GLfloat matDiffuse[] = { 0.8, 0.8, 0.8, 1.0 };
-    GLfloat matSpecular[] = { 1.0, 1.0, 1.0, 1.0 };
-    GLfloat matShininess[] = { 128.0 };
-    glMaterialfv( GL_FRONT_AND_BACK, GL_AMBIENT, matAmbient );
-    glMaterialfv( GL_FRONT_AND_BACK, GL_DIFFUSE, matDiffuse );
-    glMaterialfv( GL_FRONT_AND_BACK, GL_SPECULAR, matSpecular );
-    glMaterialfv( GL_FRONT_AND_BACK, GL_SHININESS, matShininess );
-    
-    glTexEnvf( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE );
-    glBindTexture( GL_TEXTURE_2D, spotsTexObj );
-    
-    glFrontFace( GL_CW ); // Need to do this because the built-in teapot is modelled using clockwise polygon winding.
-    glDisable( GL_CULL_FACE );  // Disable back-face culling.
-    
-    glPushMatrix();
-    glTranslated( -0.3, -0.5, size * 0.75 + TABLETOP_Z );
-    glRotated( 90.0, 0.0, 0.0, 1.0 );
-    glRotated( 90.0, 1.0, 0.0, 0.0 );
-    glutSolidTeapot( size ); // This function also generates texture coordinates on the teapot.
-    glPopMatrix();
-    
-    glEnable( GL_CULL_FACE );	// Enable back-face culling.
-    glFrontFace( GL_CCW );		// Go back to counter-clockwise polygon winding.
-}
-
-
-
-
-/////////////////////////////////////////////////////////////////////////////
-// Draw a non-texture-mapped sphere.
-/////////////////////////////////////////////////////////////////////////////
-
-void DrawSphere( void )
-{
-    double radius = 0.35;
-    
-    GLfloat matAmbient[] = { 0.7, 0.5, 0.2, 1.0 };
-    GLfloat matDiffuse[] = { 0.7, 0.5, 0.2, 1.0 };
-    GLfloat matSpecular[] = { 1.0, 1.0, 1.0, 1.0 };
-    GLfloat matShininess[] = { 128.0 };
-    glMaterialfv( GL_FRONT_AND_BACK, GL_AMBIENT, matAmbient );
-    glMaterialfv( GL_FRONT_AND_BACK, GL_DIFFUSE, matDiffuse );
-    glMaterialfv( GL_FRONT_AND_BACK, GL_SPECULAR, matSpecular );
-    glMaterialfv( GL_FRONT_AND_BACK, GL_SHININESS, matShininess );
-    
-    glBindTexture( GL_TEXTURE_2D, 0 );  // Texture object ID == 0 means no texture mapping.
-    
-    glPushMatrix();
-    glTranslated( 0.3, 0.5, radius + TABLETOP_Z );
-    glutSolidSphere( radius, 32, 16 );
-    glPopMatrix();
-}
-
-
-
-/////////////////////////////////////////////////////////////////////////////
-// Draw a texture-mapped cube.
-/////////////////////////////////////////////////////////////////////////////
-
-void DrawCube(void)
-{
-    double edge = 0.3;
-    
-   /* GLfloat matAmbient[] = { 0.8, 0.8, 0.8, 1.0 };
-    GLfloat matDiffuse[] = { 0.8, 0.8, 0.8, 1.0 };
-    GLfloat matSpecular[] = { 1.0, 1.0, 1.0, 1.0 };
-    GLfloat matShininess[] = { 128.0 };
-    
-    glMaterialfv( GL_FRONT_AND_BACK, GL_AMBIENT, matAmbient );
-    glMaterialfv( GL_FRONT_AND_BACK, GL_DIFFUSE, matDiffuse );
-    glMaterialfv( GL_FRONT_AND_BACK, GL_SPECULAR, matSpecular );
-    glMaterialfv( GL_FRONT_AND_BACK, GL_SHININESS, matShininess );
-    */
-    glTexEnvf( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE );
-    glBindTexture( GL_TEXTURE_2D, cubeTexObj );
-    
-    glFrontFace( GL_CW ); // Need to do this because the built-in cube is modelled using clockwise polygon winding.
-    glDisable( GL_CULL_FACE );  // Disable back-face culling.
-    
-
-    
-    glPushMatrix();
-    //glTranslated( 0.7, -0.8, edge/2 +TABLETOP_Z );
-    //glutSolidCube(0.3);
-    glTranslated( 0.7, -0.5, edge * 0.75 + TABLETOP_Z + 0.5 );
-    glRotated( 90.0, 0.0, 0.0, 1.0 );
-    glRotated( 90.0, 1.0, 0.0, 0.0 );
-    //glutSolidTorus(0.02, 0.03, 5, 10);
-    glutSolidTeapot( edge );
-    glPopMatrix();
-    
-    glEnable( GL_CULL_FACE );	// Enable back-face culling.
-    glFrontFace( GL_CCW );		// Go back to counter-clockwise polygon winding.
-    
-}
-
-
-
-/////////////////////////////////////////////////////////////////////////////
-// Draw the table.
-/////////////////////////////////////////////////////////////////////////////
-
-void DrawTable( void )
-{
-    // Tabletop.
-    
-    GLfloat matAmbient1[] = { 0.4, 0.6, 0.8, 1.0 };
-    GLfloat matDiffuse1[] = { 0.4, 0.6, 0.8, 1.0 };
-    GLfloat matSpecular1[] = { 0.8, 0.8, 0.8, 1.0 };
-    GLfloat matShininess1[] = { 128.0 };
-    glMaterialfv( GL_FRONT_AND_BACK, GL_AMBIENT, matAmbient1 );
-    glMaterialfv( GL_FRONT_AND_BACK, GL_DIFFUSE, matDiffuse1 );
-    glMaterialfv( GL_FRONT_AND_BACK, GL_SPECULAR, matSpecular1 );
-    glMaterialfv( GL_FRONT_AND_BACK, GL_SHININESS, matShininess1 );
-    
-    //********************************************************
-    //*********** TASK #1: WRITE YOUR CODE BELOW *************
-    //********************************************************
-    // Must use the SubdivideAndDrawQuad() function to draw the tabletop rectangle.
-    // So that the tabletop has small enough quads to show the sharp specular highlight.
-    //
-    // Correct texture coordinates must be provided at the vertices of the tabletop rectangle,
-    // so that the reflection tecture map is correctly mapped on it.
-    //
-    // The reflection on the tabletop should not be 100% (it is not a perfect mirror),
-    // and the underlying diffuse color and lighting on the tabletop must still be visible.
-    //********************************************************
-    
-    
-    
-    
-    
-    // Sides.
-    
-    GLfloat matAmbient2[] = { 0.2, 0.3, 0.4, 1.0 };
-    GLfloat matDiffuse2[] = { 0.2, 0.3, 0.4, 1.0 };
-    GLfloat matSpecular2[] = { 0.6, 0.8, 1.0, 1.0 };
-    GLfloat matShininess2[] = { 128.0 };
-    glMaterialfv( GL_FRONT_AND_BACK, GL_AMBIENT, matAmbient2 );
-    glMaterialfv( GL_FRONT_AND_BACK, GL_DIFFUSE, matDiffuse2 );
-    glMaterialfv( GL_FRONT_AND_BACK, GL_SPECULAR, matSpecular2 );
-    glMaterialfv( GL_FRONT_AND_BACK, GL_SHININESS, matShininess2 );
-    
-    glBindTexture( GL_TEXTURE_2D, 0 ); // Texture object ID == 0 means no texture mapping.
-    
-    // In +y direction.
-    glNormal3f( 0.0, 1.0, 0.0 ); // Normal vector.
-    SubdivideAndDrawQuad( 24, 2,  0.0, 0.0, TABLETOP_X2, TABLETOP_Y2, TABLETOP_Z - TABLE_THICKNESS,
-                         1.0, 0.0, TABLETOP_X1, TABLETOP_Y2, TABLETOP_Z - TABLE_THICKNESS,
-                         1.0, 1.0, TABLETOP_X1, TABLETOP_Y2, TABLETOP_Z,
-                         0.0, 1.0, TABLETOP_X2, TABLETOP_Y2, TABLETOP_Z );
-    // In -y direction.
-    glNormal3f( 0.0, -1.0, 0.0 ); // Normal vector.
-    SubdivideAndDrawQuad( 24, 2,  0.0, 0.0, TABLETOP_X1, TABLETOP_Y1, TABLETOP_Z - TABLE_THICKNESS,
-                         1.0, 0.0, TABLETOP_X2, TABLETOP_Y1, TABLETOP_Z - TABLE_THICKNESS,
-                         1.0, 1.0, TABLETOP_X2, TABLETOP_Y1, TABLETOP_Z,
-                         0.0, 1.0, TABLETOP_X1, TABLETOP_Y1, TABLETOP_Z );
-    // In +x direction.
-    glNormal3f( 1.0, 0.0, 0.0 ); // Normal vector.
-    SubdivideAndDrawQuad( 24, 2,  0.0, 0.0, TABLETOP_X2, TABLETOP_Y1, TABLETOP_Z - TABLE_THICKNESS,
-                         1.0, 0.0, TABLETOP_X2, TABLETOP_Y2, TABLETOP_Z - TABLE_THICKNESS,
-                         1.0, 1.0, TABLETOP_X2, TABLETOP_Y2, TABLETOP_Z,
-                         0.0, 1.0, TABLETOP_X2, TABLETOP_Y1, TABLETOP_Z );
-    // In -x direction.
-    glNormal3f( -1.0, 0.0, 0.0 ); // Normal vector.
-    SubdivideAndDrawQuad( 24, 2,  0.0, 0.0, TABLETOP_X1, TABLETOP_Y2, TABLETOP_Z - TABLE_THICKNESS,
-                         1.0, 0.0, TABLETOP_X1, TABLETOP_Y1, TABLETOP_Z - TABLE_THICKNESS,
-                         1.0, 1.0, TABLETOP_X1, TABLETOP_Y1, TABLETOP_Z,
-                         0.0, 1.0, TABLETOP_X1, TABLETOP_Y2, TABLETOP_Z );
-    
-    // Bottom.
-    
-    glNormal3f( 0.0, 0.0, -1.0 ); // Normal vector.
-    SubdivideAndDrawQuad( 24, 24, 0.0, 0.0, TABLETOP_X1, TABLETOP_Y1, TABLETOP_Z - TABLE_THICKNESS,
-                         1.0, 0.0, TABLETOP_X1, TABLETOP_Y2, TABLETOP_Z - TABLE_THICKNESS,
-                         1.0, 1.0, TABLETOP_X2, TABLETOP_Y2, TABLETOP_Z - TABLE_THICKNESS,
-                         0.0, 1.0, TABLETOP_X2, TABLETOP_Y1, TABLETOP_Z - TABLE_THICKNESS );
-    
-    // Top.
-    glBindTexture(GL_TEXTURE_2D, reflectionTexObj);
-    glNormal3f( 0.0, 0.0, 1.0 ); // Normal vector.
-    SubdivideAndDrawQuad( 24, 24, 0.0, 0.0, TABLETOP_X1, TABLETOP_Y1, TABLETOP_Z ,
-                         0.0, 1.0, TABLETOP_X2, TABLETOP_Y1, TABLETOP_Z ,
-                         1.0, 1.0, TABLETOP_X2, TABLETOP_Y2, TABLETOP_Z ,
-                         1.0, 0.0, TABLETOP_X1, TABLETOP_Y2, TABLETOP_Z  );
-    
-    
-    // Legs.
-    glBindTexture( GL_TEXTURE_2D, 0 );
-    GLfloat matAmbient3[] = { 0.4, 0.4, 0.4, 1.0 };
-    GLfloat matDiffuse3[] = { 0.4, 0.4, 0.4, 1.0 };
-    GLfloat matSpecular3[] = { 0.8, 0.8, 0.8, 1.0 };
-    GLfloat matShininess3[] = { 64.0 };
-    glMaterialfv( GL_FRONT_AND_BACK, GL_AMBIENT, matAmbient3 );
-    glMaterialfv( GL_FRONT_AND_BACK, GL_DIFFUSE, matDiffuse3 );
-    glMaterialfv( GL_FRONT_AND_BACK, GL_SPECULAR, matSpecular3 );
-    glMaterialfv( GL_FRONT_AND_BACK, GL_SHININESS, matShininess3 );
-    
-    glPushMatrix();
-    glTranslated( TABLETOP_X1 + TABLE_THICKNESS, TABLETOP_Y1 + TABLE_THICKNESS, 0.0 );
-    glScaled( TABLE_THICKNESS, TABLE_THICKNESS, TABLETOP_Z - TABLE_THICKNESS );
-    glTranslated( 0.0, 0.0, 0.5 );
-    glutSolidCube( 1.0 );
-    glPopMatrix();
-    
-    glPushMatrix();
-    glTranslated( TABLETOP_X2 - TABLE_THICKNESS, TABLETOP_Y1 + TABLE_THICKNESS, 0.0 );
-    glScaled( TABLE_THICKNESS, TABLE_THICKNESS, TABLETOP_Z - TABLE_THICKNESS );
-    glTranslated( 0.0, 0.0, 0.5 );
-    glutSolidCube( 1.0 );
-    glPopMatrix();
-    
-    glPushMatrix();
-    glTranslated( TABLETOP_X2 - TABLE_THICKNESS, TABLETOP_Y2 - TABLE_THICKNESS, 0.0 );
-    glScaled( TABLE_THICKNESS, TABLE_THICKNESS, TABLETOP_Z - TABLE_THICKNESS );
-    glTranslated( 0.0, 0.0, 0.5 );
-    glutSolidCube( 1.0 );
-    glPopMatrix();
-    
-    glPushMatrix();
-    glTranslated( TABLETOP_X1 + TABLE_THICKNESS, TABLETOP_Y2 - TABLE_THICKNESS, 0.0 );
-    glScaled( TABLE_THICKNESS, TABLE_THICKNESS, TABLETOP_Z - TABLE_THICKNESS );
-    glTranslated( 0.0, 0.0, 0.5 );
-    glutSolidCube( 1.0 );
-    glPopMatrix();
-}
-
-
-/////////////////////////////////////////////////////////////////////////////
-// Draw a texture-mapped cube.
-/////////////////////////////////////////////////////////////////////////////
-
-void DrawTinyCube(void)
-{
-    const float edge = 0.3;
-    
-    glTexEnvf( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE );
-    
-    // Top.
-    
-    
-    GLfloat matAmbient1[] = { 0.7, 0.7, 0.7, 1.0 };
-    GLfloat matDiffuse1[] = { 0.7, 0.7, 0.7, 1.0 };
-    GLfloat matSpecular1[] = { 0.3, 0.3, 0.3, 1.0 };
-    GLfloat matShininess1[] = { 128.0 };
-    glMaterialfv( GL_FRONT_AND_BACK, GL_AMBIENT, matAmbient1 );
-    glMaterialfv( GL_FRONT_AND_BACK, GL_DIFFUSE, matDiffuse1 );
-    glMaterialfv( GL_FRONT_AND_BACK, GL_SPECULAR, matSpecular1 );
-    glMaterialfv( GL_FRONT_AND_BACK, GL_SHININESS, matShininess1 );
-    
-    glBindTexture( GL_TEXTURE_2D, cubeTexObj );
-    glTranslated( -0.6, 1.1,  TABLETOP_Z + 0.26 );
-    glNormal3f( 0.0, 0.0, 1.0 ); // Normal vector.
-    SubdivideAndDrawQuad( 24, 24, 0.0, 0.0, edge, edge, edge,
-                         0.0, edge, -edge, edge, edge ,
-                         edge, edge, -edge, -edge, edge,
-                         edge, 0.0, edge, -edge, edge);
-   
-    // Walls.
-    
-    glBindTexture( GL_TEXTURE_2D, cubeTexObj );
-    
-    // In +y direction.
-    glNormal3f( 0.0, 1.0, 0.0 ); // Normal vector.
-    SubdivideAndDrawQuad( 24, 16, 0.0, 0.0, -edge, edge, 0.0,
-                         0.0, edge, -edge, edge, edge ,
-                         edge, edge, edge, edge, edge ,
-                         edge, 0.0, edge, edge, 0.0  );
-    // In -y direction.
-    glNormal3f( 0.0, -1.0, 0.0 ); // Normal vector.
-    SubdivideAndDrawQuad( 24, 16, 0.0, 0.0, edge, -edge, 0.0,
-                         0.0, edge, edge, -edge, edge,
-                         edge, edge, -edge, -edge, edge ,
-                         edge, 0.0, -edge, -edge, 0.0  );
-    // In +x direction.
-    glNormal3f( 1.0, 0.0, 0.0 ); // Normal vector.
-    SubdivideAndDrawQuad( 24, 16, 0.0, 0.0, edge, edge, 0.0,
-                         0.0, edge, edge, edge, edge ,
-                         edge, edge, edge, -edge, edge ,
-                         edge, 0.0, edge, -edge, 0.0 );
-    // In -x direction.
-    glNormal3f( -1.0, 0.0, 0.0 ); // Normal vector.
-    SubdivideAndDrawQuad( 24, 16, 0.0, 0.0, -edge, -edge, 0.0,
-                          0.0, edge, -edge, -edge, edge ,
-                          edge, edge, -edge, edge, edge ,
-                          edge, 0.0, -edge, edge, 0.0 );
-   
-    // Bottom.
-    
-    GLfloat matAmbient2[] = { 0.6, 0.6, 0.6, 1.0 };
-    GLfloat matDiffuse2[] = { 0.6, 0.6, 0.6, 1.0 };
-    GLfloat matSpecular2[] = { 1.0, 1.0, 1.0, 1.0 };
-    GLfloat matShininess2[] = { 128.0 };
-    glMaterialfv( GL_FRONT_AND_BACK, GL_AMBIENT, matAmbient2 );
-    glMaterialfv( GL_FRONT_AND_BACK, GL_DIFFUSE, matDiffuse2 );
-    glMaterialfv( GL_FRONT_AND_BACK, GL_SPECULAR, matSpecular2 );
-    glMaterialfv( GL_FRONT_AND_BACK, GL_SHININESS, matShininess2 );
-    
-    glBindTexture( GL_TEXTURE_2D, cubeTexObj );
-    glNormal3f( 0.0, 0.0, -1.0 ); // Normal vector.
-    SubdivideAndDrawQuad( 24, 24, 0.0, 0.0, edge, edge, 0,
-                         edge, 0.0, edge, -edge, 0,
-                         edge, edge, -edge, -edge, 0,
-                         0.0, edge, -edge, edge, 0  );
-    
+    scene.camera = Camera( Vector3d( 150.0, 120.0, 150.0 ), Vector3d( 45.0, 22.0, 55.0 ), Vector3d( 0.0, 1.0, 0.0 ),
+                          (-1.0 * imageWidth) / imageHeight, (1.0 * imageWidth) / imageHeight, -1.0, 1.0, 3.0,
+                          imageWidth, imageHeight );
     
 }
